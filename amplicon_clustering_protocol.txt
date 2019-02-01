@@ -1,0 +1,143 @@
+#======================#
+#   Date 22/12 2017    #
+# Author: sm@mbg.au.dk #
+#======================#
+
+#===========================================#
+# Analysis of MiSeq reads from QQAD samples #
+#===========================================#
+
+PEAR is used to merge forward and reverse reads into a single read file (https://sco.h-its.org/exelixis/web/software/pear/doc.html)
+	Can be run on iMac, but was run on the Linux based cluster system at BiRC 
+	Default settings 
+	
+	
+#==================#
+# Processing reads #
+#==================#
+
+Remove primers
+	All merged read files (.assembled.fastq) are moved to a common folder
+	Keep script in same folder for convenience 
+	Create an empty folder in the root folder called No_primers
+		The filed with primerless reads while be created here
+	Run script remove_primers.py with the following commands in bash 
+		$ cd /Users/sara91/Documents/PhD/Materials_and_methods/QQAD/field_samples/2016/all_reads (directory for reads)
+		$ for f in *.fastq; do     python3 remove_primers.py $f > No_primers/$f; done
+	This will take a few hours to run depending on the sample number 
+
+Count and merge unique seqs
+	This step assigns a global sequence ID to all unique sequences
+		It then counts how many times this sequence occurs in the file and merges them
+			Lowest accepted count can be specified in line 30 ( if count >= 5: ) 
+		It is important to keep ALL files for the analysis in the same folder when the script is run
+		Example of in file and output file 
+	unique_seqs.py 
+	place the script in the root folder (not the folder with the reads)
+	run using 
+		$ python3 unique_seqs.py "*/*.fastq"
+		
+Merge files 
+	Merge 170 files with unique sequences and counts
+		>cat */*.fastq.unique > all_samples.fastq.unique
+
+Sort file by sample: 
+	>python3 sort_by_sample_id.py all_samples.fastq.unique > all_samples_sorted.fastq.unique
+
+
+
+#===========================================#
+# Clustering reads into separate gene files #
+#===========================================#
+
+https://gist.github.com/knmkr/5393474
+# Creating the database index for the reference
+makeblastdb -in reference_file.fasta -parse_seqids -dbtype nucl
+
+# Blastn samples against reference
+blastn -query all_samples_sorted.fastq.unique -db reference_file.fasta -evalue 0.1 -outfmt 6 > blast_results_qqad_samples.txt
+
+# Filter the results using grep/filter
+awk '$10>250{print $0}' blast_results_qqad_samples.txt > blast_results_qqad_samples_filtered.txt
+
+
+awk '$2 ~ /rpoB/ {print $0}' blast_results_qqad_samples_filtered.txt > rpoB.txt
+awk '$2 ~ /recA/ {print $0}' blast_results_qqad_samples_filtered.txt > recA.txt
+awk '$2 ~ /nodA/ {print $0}' blast_results_qqad_samples_filtered.txt > nodA.txt
+awk '$2 ~ /nodD/ {print $0}' blast_results_qqad_samples_filtered.txt > nodD.txt
+
+
+# Filter for the first line (ID's) of each blast result
+awk '{print $1}' rpoB.txt > rpoB_ids.txt
+awk '{print $1}' recA.txt > recA_ids.txt
+awk '{print $1}' nodA.txt > nodA_ids.txt
+awk '{print $1}' nodD.txt > nodD_ids.txt
+
+# Take the ID's and extract it from the big fasta file 
+cat rpoB_ids.txt | awk '{gsub("_","\\_",$0);$0="(?s)^>"$0".*?(?=\\n(\\z|>))"}1' | pcregrep -oM -f - all_samples_sorted.fastq.unique > rpoB.fasta
+
+cat recA_ids.txt | awk '{gsub("_","\\_",$0);$0="(?s)^>"$0".*?(?=\\n(\\z|>))"}1' | pcregrep -oM -f - all_samples_sorted.fastq.unique > recA.fasta
+
+cat nodA_ids.txt | awk '{gsub("_","\\_",$0);$0="(?s)^>"$0".*?(?=\\n(\\z|>))"}1' | pcregrep -oM -f - all_samples_sorted.fastq.unique > nodA.fasta
+
+cat nodD_ids.txt | awk '{gsub("_","\\_",$0);$0="(?s)^>"$0".*?(?=\\n(\\z|>))"}1' | pcregrep -oM -f - all_samples_sorted.fastq.unique > nodD.fasta
+
+BF: I use pcre2grep instead!!
+
+The rpoB.fasta files can be used for further analysis.
+
+
+#================#
+# Heat maps in R #
+#================#
+
+
+Phylogenies 
+	Extract unique sequences for phylogeny (05_extract_unique.py)
+		$ python3 05_extract_unique.py recA.fasta > recA_unique.fasta
+		NB! It is important that the filtering you perform in the R script matches the filtering performed on the fasta file.
+		If you filter for read count > 75 in the R script, the fasta files must be filtered similarly, 
+		or the trees and heat maps will not fit each other. 
+	
+	Filter fasta files to match R filtering (04_remove_low_count.py)
+		For this the script 04_remove_low_count.py can be used. Due to differences in the language in R and python,
+		the filtering has to be R filter +1. So read count > 76 in the script, if you have read count > 75 in R.
+		The file on which the script is run, is specified in the script itself, so the file has to be changed,
+		when you want to run it on a new file. 
+			$ python 04_remove_low_count.py > rpoB_min75.fasta
+
+	run alignment (ClustalOmega, https://www.ebi.ac.uk/Tools/msa/clustalo/)
+		export newick file (.nwk)
+
+R heat maps 
+	Create R heat maps for high count sequences (00_heatmaps.R)
+		Use the rpoB_ids.txt files created earlier 
+		Rename if necessary		
+			No row sorting 
+			Column sorting based on Newick tree
+
+
+
+I have not used the below scripts for the data generation for January 2019 or May 2018 MiSeq run.  
+
+#===============================#
+# Additional tweaks and scripts #
+#===============================#	
+
+Remove PCR errors 
+run collapse_similar_sequences.py on seqs_clustered_parsed_headers_nodA.fasta
+	output file: seqs_clustered_parsed_headers_nodA.fasta.merged
+
+remove low count - remove_low_count.py
+	d17392:qqad_output sara91$ python remove_low_count.py > seqs_clustered_parsed_headers_rpoB_min_count_500.fasta
+
+Venn diagrams 
+create .txt files for nodA_UK.txt etc with 06_extract_unique_bySample.py
+	d17392:qqad_output sara91$ python3 06_extract_unique_bySample.py seqs_clustered_parsed_headers_rpoB_min_count_500.fasta
+	in textwrangler: text > process duplicate lines > remove duplicate lines 
+		to create list of unique 
+
+
+ 
+
+ 
